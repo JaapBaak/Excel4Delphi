@@ -223,6 +223,22 @@ type
     property isHaveDrawings: Boolean read FisHaveDrawings write FisHaveDrawings; // Is need create drawings*.xml?
   end;
 
+  TZSharedFormula = record
+  private
+    Top, Left: Integer;          // Starting cell of the shared formula block
+    TopLeftFormula: String;      // Original formula at the top-left cell
+    Function ShiftReference(const Ref: string; RowOffset, ColOffset: Integer): string;
+    Function AdjustRange(const Range: string; RowOffset, ColOffset: Integer): string;
+    Function IsCellReference(const Token: string): Boolean;
+    Function IsFunctionName(const Formula: string; Pos: Integer): Boolean;
+    Function NextToken(const Formula: string; var Pos: Integer): string;
+    Procedure HandleReferenceOrRange(var Formula: string; const Token: string; var Pos: Integer; RowOffset, ColOffset: Integer);
+    Function ProcessFormula(const Formula: string; RowOffset, ColOffset: Integer): string;
+  public
+    Constructor Create(Row,Col: Integer; const Formula: String);
+    Function Formula(Row, Col: Integer): String;
+  end;
+
   TExcel4DelphiReader = class(TObject)
   private
     // todo: FRawStyleList: TRawStyleList;
@@ -1127,6 +1143,156 @@ begin
   FisHaveComments := false;
 end;
 
+// Shared formula
+
+Constructor TZSharedFormula.Create(Row,Col: Integer; const Formula: String);
+begin
+  Top := Row;
+  Left := Col;
+  TopLeftFormula := Formula;
+end;
+
+Function TZSharedFormula.ShiftReference(const Ref: string; RowOffset, ColOffset: Integer): string;
+// Shifts a single cell reference (e.g., "A1") by the given row and column offsets
+var
+  ColLetters: string;
+  ColNum, i: Integer;
+begin
+  // Extract column letters (e.g., "A" from "A1")
+  i := 1;
+  while (i <= Length(Ref)) and CharInSet(Ref[i], ['A'..'Z']) do Inc(i);
+  ColLetters := Copy(Ref, 1, i - 1);
+  // Convert letters to numeric column index (A=1, B=2, ..., Z=26, AA=27)
+  ColNum := 0;
+  for i := 1 to Length(ColLetters) do ColNum := ColNum * 26 + (Ord(ColLetters[i]) - Ord('A') + 1);
+  // Apply column offset
+  Inc(ColNum, ColOffset);
+  // Convert back to letters
+  Result := '';
+  while ColNum > 0 do
+  begin
+    Dec(ColNum);
+    Result := Chr(Ord('A') + (ColNum mod 26)) + Result;
+    ColNum := ColNum div 26;
+  end;
+  // Apply row offset and append to column letters
+  Result := Result + IntToStr(StrToInt(Copy(Ref, Length(ColLetters) + 1, MaxInt)) + RowOffset);
+end;
+
+Function TZSharedFormula.AdjustRange(const Range: string; RowOffset, ColOffset: Integer): string;
+// Adjusts a range (e.g., "A1:B2") by shifting both start and end references
+var
+  Parts: TArray<string>;
+begin
+  Parts := Range.Split([':']);
+  if Length(Parts) = 2 then
+    Result := ShiftReference(Parts[0], RowOffset, ColOffset) + ':' +
+              ShiftReference(Parts[1], RowOffset, ColOffset)
+  else
+    Result := Range; // If not a valid range, return unchanged
+end;
+
+Function TZSharedFormula.NextToken(const Formula: string; var Pos: Integer): string;
+// Reads next token (letters + digits) starting at Pos
+var
+  startPos: Integer;
+begin
+  startPos := Pos;
+  while (Pos <= Length(Formula)) and CharInSet(Formula[Pos], ['A'..'Z']) do Inc(Pos);
+  while (Pos <= Length(Formula)) and CharInSet(Formula[Pos], ['0'..'9']) do Inc(Pos);
+  Result := Copy(Formula, startPos, Pos - startPos);
+end;
+
+
+function TZSharedFormula.IsCellReference(const Token: string): Boolean;
+// Checks if token looks like a cell reference (letters followed by digits)
+var
+  i: Integer;
+  hasLetters, hasDigits: Boolean;
+begin
+  Result := False;
+  if Token = '' then Exit;
+  hasLetters := False;
+  hasDigits := False;
+  // Check for letters first
+  i := 1;
+  while (i <= Length(Token)) and CharInSet(Token[i], ['A'..'Z']) do
+  begin
+    hasLetters := True;
+    Inc(i);
+  end;
+  // Then check for digits
+  while (i <= Length(Token)) and CharInSet(Token[i], ['0'..'9']) do
+  begin
+    hasDigits := True;
+    Inc(i);
+  end;
+  // Valid cell reference must have both letters and digits
+  Result := hasLetters and hasDigits;
+end;
+
+Function TZSharedFormula.IsFunctionName(const Formula: string; Pos: Integer): Boolean;
+// Checks if token is followed by '(' → function name
+begin
+  Result := (Pos <= Length(Formula)) and (Formula[Pos] = '(');
+end;
+
+Procedure TZSharedFormula.HandleReferenceOrRange(var Formula: string; const Token: string; var Pos: Integer; RowOffset, ColOffset: Integer);
+// Handles replacing a single reference or range
+var
+  startPos: Integer;
+  rangeToken: string;
+begin
+  startPos := Pos;
+  if (Pos <= Length(Formula)) and (Formula[Pos] = ':') then
+  begin
+    Inc(Pos);
+    while (Pos <= Length(Formula)) and CharInSet(Formula[Pos], ['A'..'Z']) do Inc(Pos);
+    while (Pos <= Length(Formula)) and CharInSet(Formula[Pos], ['0'..'9']) do Inc(Pos);
+    rangeToken := Copy(Formula, startPos - Length(Token), Pos - (startPos - Length(Token)));
+    Formula := Formula.Replace(rangeToken, AdjustRange(rangeToken, RowOffset, ColOffset));
+  end
+  else
+    Formula := Formula.Replace(Token, ShiftReference(Token, RowOffset, ColOffset));
+end;
+
+Function TZSharedFormula.ProcessFormula(const Formula: string; RowOffset, ColOffset: Integer): string;
+// Main method: scans formula and adjusts references
+var
+  i: Integer;
+  token: string;
+begin
+  Result := Formula;
+  i := 1;
+  while i <= Length(Result) do
+  begin
+    if CharInSet(Result[i], ['A'..'Z']) then
+    begin
+      token := NextToken(Result, i);
+      // Skip if it's a function name
+      if IsFunctionName(Result, i) then
+      begin
+        Inc(i);
+        Continue;
+      end;
+      if IsCellReference(token) then
+        HandleReferenceOrRange(Result, token, i, RowOffset, ColOffset);
+    end
+    else
+      Inc(i);
+  end;
+end;
+
+Function TZSharedFormula.Formula(Row, Col: Integer): String;
+// Public method: calculates offsets and processes formula
+var
+  RowOffset, ColOffset: Integer;
+begin
+  RowOffset := Row - Top;
+  ColOffset := Col - Left;
+  Result := ProcessFormula(TopLeftFormula, RowOffset, ColOffset);
+end;
+
 // Возвращает номер Relations из rels
 // INPUT
 // const name: string - текст отношения
@@ -1663,156 +1829,188 @@ var
     _type: string;
     _cr, _cc: Integer;
     maxCol: Integer;
+    SharedFormula: Integer;
+    SharedFormulaDictionary: TDictionary<Integer,TZSharedFormula>;
   begin
     _cr := 0;
     _cc := 0;
     maxCol := 0;
     CheckRow(1);
     CheckCol(1);
-    while Xml.ReadToEndTagByName('sheetData') do
-    begin
-      // ячейка
-      if (Xml.TagName = 'c') then
+    SharedFormulaDictionary := TDictionary<Integer,TZSharedFormula>.Create;
+    try
+      while Xml.ReadToEndTagByName('sheetData') do
       begin
-        str := Xml.Attributes.ItemsByName['r']; // номер
-        if (str > '') then
-          if (ZEGetCellCoords(str, _cc, _cr)) then
-          begin
-            currentCol := _cc;
-            CheckCol(_cc + 1);
-          end;
-
-        _type := Xml.Attributes.ItemsByName['t']; // тип
-
-        // s := xml.Attributes.ItemsByName['cm'];
-        // s := xml.Attributes.ItemsByName['ph'];
-        // s := xml.Attributes.ItemsByName['vm'];
-        v := '';
-        _num := 0;
-        currentCell := currentSheet.Cell[currentCol, currentRow];
-        str := Xml.Attributes.ItemsByName['s']; // стиль
-        if (str > '') then
-          if (TryStrToInt(str, t)) then
-            currentCell.CellStyle := t;
-        if (Xml.IsTagStart) then
-          while Xml.ReadToEndTagByName('c') do
-          begin
-          // is пока игнорируем
-            if Xml.IsTagEndByName('v') or Xml.IsTagEndByName('t') then
-            begin
-              if (_num > 0) then
-                v := v + sLineBreak;
-              v := v + Xml.TextBeforeTag;
-              inc(_num);
-            end
-            else if Xml.IsTagEndByName('f') then
-              currentCell.Formula := ZEReplaceEntity(Xml.TextBeforeTag);
-          end; // while
-
-        // Возможные типы:
-        // s - sharedstring
-        // b - boolean
-        // n - number
-        // e - error
-        // str - string
-        // inlineStr - inline string ??
-        // d - date
-        // тип может отсутствовать. Интерпретируем в таком случае как ZEGeneral
-        if (_type = '') then
-          currentCell.CellType := ZEGeneral
-        else if (_type = 'n') then
+        // cell
+        if (Xml.TagName = 'c') then
         begin
-          currentCell.CellType := ZENumber;
-          // Trouble: if cell style is number, and number format is date, then
-          // cell style is date. F****** m$!
-          if (ReadHelper.NumberFormats.IsDateFormat(currentCell.CellStyle)) then
-            if (ZEIsTryStrToFloat(v, tempFloat)) then
+          str := Xml.Attributes.ItemsByName['r']; // number
+          if (str > '') then
+            if (ZEGetCellCoords(str, _cc, _cr)) then
             begin
-              currentCell.CellType := ZEDateTime;
-              v := ZEDateTimeToStr(tempFloat);
+              currentCol := _cc;
+              CheckCol(_cc + 1);
             end;
-        end
-        else if (_type = 's') then
-        begin
-          currentCell.CellType := ZEString;
-          if (TryStrToInt(v, t)) then
-            if ((t >= 0) and (t < StrCount)) then
-              v := StrArray[t];
-        end
-        else if (_type = 'd') then
-        begin
-          currentCell.CellType := ZEDateTime;
-          if (TryZEStrToDateTime(v, tempDate)) then
-            v := ZEDateTimeToStr(tempDate)
-          else if (ZEIsTryStrToFloat(v, tempFloat)) then
-            v := ZEDateTimeToStr(tempFloat)
-          else
-            currentCell.CellType := ZEString;
-        end;
 
-        currentCell.Data := ZEReplaceEntity(v);
-        inc(currentCol);
-        CheckCol(currentCol + 1);
-        if currentCol > maxCol then
-          maxCol := currentCol;
-      end
-      else
-      // строка
-        if Xml.IsTagStartOrClosedByName('row') then
-      begin
-        currentCol := 0;
-        str := Xml.Attributes.ItemsByName['r']; // индекс строки
-        if (str > '') then
-          if (TryStrToInt(str, t)) then
+          _type := Xml.Attributes.ItemsByName['t']; // type
+
+          // s := xml.Attributes.ItemsByName['cm'];
+          // s := xml.Attributes.ItemsByName['ph'];
+          // s := xml.Attributes.ItemsByName['vm'];
+          v := '';
+          _num := 0;
+          currentCell := currentSheet.Cell[currentCol, currentRow];
+          str := Xml.Attributes.ItemsByName['s']; // style
+          if (str > '') then
+            if (TryStrToInt(str, t)) then
+              currentCell.CellStyle := t;
+          if (Xml.IsTagStart) then
           begin
-            currentRow := t - 1;
-            CheckRow(t);
+            SharedFormula := -1;
+            while Xml.ReadToEndTagByName('c') do
+            begin
+              if Xml.IsTagStartByName('f') then
+              begin
+                if Xml.Attributes.ItemsByName['t'] = 'shared' then
+                SharedFormula := Xml.Attributes.ItemsByName['si'].ToInteger;
+              end else
+              if Xml.IsTagEndByName('f') then
+              begin
+                if SharedFormula >= 0 then
+                  if not SharedFormulaDictionary.ContainsKey(SharedFormula) then
+                  begin
+                    currentCell.Formula := ZEReplaceEntity(Xml.TextBeforeTag);
+                    SharedFormulaDictionary.Add(SharedFormula,TZSharedFormula.Create(CurrentRow,CurrentCol,currentCell.Formula))
+                  end else
+                    raise Exception.Create('Duplicate shared formula index')
+                else
+                  currentCell.Formula := ZEReplaceEntity(Xml.TextBeforeTag)
+              end else
+              if Xml.IsTagClosedByName('f') then
+              begin
+                if Xml.Attributes.ItemsByName['t'] = 'shared' then
+                begin
+                  SharedFormula := Xml.Attributes.ItemsByName['si'].ToInteger;
+                  currentCell.Formula := SharedFormulaDictionary[SharedFormula].Formula(CurrentRow,CurrentCol)
+                end;
+              end else
+              if Xml.IsTagEndByName('v') or Xml.IsTagEndByName('t') then
+              begin
+                if (_num > 0) then
+                  v := v + sLineBreak;
+                v := v + Xml.TextBeforeTag;
+                inc(_num);
+              end
+            end; // while
           end;
-        // s := xml.Attributes.ItemsByName['collapsed'];
-        // s := xml.Attributes.ItemsByName['customFormat'];
-        // s := xml.Attributes.ItemsByName['customHeight'];
-        currentSheet.Rows[currentRow].Hidden := ZETryStrToBoolean(Xml.Attributes.ItemsByName['hidden'], false);
 
-        str := Xml.Attributes.ItemsByName['ht']; // в поинтах
-        if (str > '') then
-        begin
-          tempReal := ZETryStrToFloat(str, 10);
-          currentSheet.Rows[currentRow].Height := tempReal;
-          // tempReal := tempReal / 2.835; //???
-          // currentSheet.Rows[currentRow].HeightMM := tempReal;
+          // Possible types:
+          // s - sharedstring
+          // b - boolean
+          // n - number
+          // e - error
+          // str - string
+          // inlineStr - inline string ??
+          // d - date
+          // The type may be absent. In this case, we interpret it as ZEGeneral
+          if (_type = '') then
+            currentCell.CellType := ZEGeneral
+          else if (_type = 'n') then
+          begin
+            currentCell.CellType := ZENumber;
+            // Trouble: if cell style is number, and number format is date, then
+            // cell style is date. F****** m$!
+            if (ReadHelper.NumberFormats.IsDateFormat(currentCell.CellStyle)) then
+              if (ZEIsTryStrToFloat(v, tempFloat)) then
+              begin
+                currentCell.CellType := ZEDateTime;
+                v := ZEDateTimeToStr(tempFloat);
+              end;
+          end
+          else if (_type = 's') then
+          begin
+            currentCell.CellType := ZEString;
+            if (TryStrToInt(v, t)) then
+              if ((t >= 0) and (t < StrCount)) then
+                v := StrArray[t];
+          end
+          else if (_type = 'd') then
+          begin
+            currentCell.CellType := ZEDateTime;
+            if (TryZEStrToDateTime(v, tempDate)) then
+              v := ZEDateTimeToStr(tempDate)
+            else if (ZEIsTryStrToFloat(v, tempFloat)) then
+              v := ZEDateTimeToStr(tempFloat)
+            else
+              currentCell.CellType := ZEString;
+          end;
+
+          currentCell.Data := ZEReplaceEntity(v);
+          inc(currentCol);
+          CheckCol(currentCol + 1);
+          if currentCol > maxCol then
+            maxCol := currentCol;
         end
         else
-          currentSheet.Rows[currentRow].Height := currentSheet.DefaultRowHeight;
+        // строка
+          if Xml.IsTagStartOrClosedByName('row') then
+        begin
+          currentCol := 0;
+          str := Xml.Attributes.ItemsByName['r']; // row index
+          if (str > '') then
+            if (TryStrToInt(str, t)) then
+            begin
+              currentRow := t - 1;
+              CheckRow(t);
+            end;
+          // s := xml.Attributes.ItemsByName['collapsed'];
+          // s := xml.Attributes.ItemsByName['customFormat'];
+          // s := xml.Attributes.ItemsByName['customHeight'];
+          currentSheet.Rows[currentRow].Hidden := ZETryStrToBoolean(Xml.Attributes.ItemsByName['hidden'], false);
 
-        str := Xml.Attributes.ItemsByName['outlineLevel'];
-        currentSheet.Rows[currentRow].OutlineLevel := StrToIntDef(str, 0);
-
-        // s := xml.Attributes.ItemsByName['ph'];
-
-        str := Xml.Attributes.ItemsByName['s']; // номер стиля
-        if (str > '') then
-          if (TryStrToInt(str, t)) then
+          str := Xml.Attributes.ItemsByName['ht']; // in points
+          if (str > '') then
           begin
-            // нужно подставить нужный стиль
-          end;
-        // s := xml.Attributes.ItemsByName['spans'];
-        // s := xml.Attributes.ItemsByName['thickBot'];
-        // s := xml.Attributes.ItemsByName['thickTop'];
+            tempReal := ZETryStrToFloat(str, 10);
+            currentSheet.Rows[currentRow].Height := tempReal;
+            // tempReal := tempReal / 2.835; //???
+            // currentSheet.Rows[currentRow].HeightMM := tempReal;
+          end
+          else
+            currentSheet.Rows[currentRow].Height := currentSheet.DefaultRowHeight;
 
-        if Xml.IsTagClosed then
+          str := Xml.Attributes.ItemsByName['outlineLevel'];
+          currentSheet.Rows[currentRow].OutlineLevel := StrToIntDef(str, 0);
+
+          // s := xml.Attributes.ItemsByName['ph'];
+
+          str := Xml.Attributes.ItemsByName['s']; // style number
+          if (str > '') then
+            if (TryStrToInt(str, t)) then
+            begin
+              // you need to substitute the desired style
+            end;
+          // s := xml.Attributes.ItemsByName['spans'];
+          // s := xml.Attributes.ItemsByName['thickBot'];
+          // s := xml.Attributes.ItemsByName['thickTop'];
+
+          if Xml.IsTagClosed then
+          begin
+            inc(currentRow);
+            CheckRow(currentRow + 1);
+          end;
+        end
+        else
+        // конец строки
+          if Xml.IsTagEndByName('row') then
         begin
           inc(currentRow);
           CheckRow(currentRow + 1);
         end;
-      end
-      else
-      // конец строки
-        if Xml.IsTagEndByName('row') then
-      begin
-        inc(currentRow);
-        CheckRow(currentRow + 1);
-      end;
-    end; // while
+      end; // while
+    finally
+      SharedFormulaDictionary.Free;
+    end;
     currentSheet.ColCount := maxCol;
   end; // _ReadSheetData
 
