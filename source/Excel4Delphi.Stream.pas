@@ -227,13 +227,8 @@ type
   private
     Top, Left: Integer;          // Starting cell of the shared formula block
     TopLeftFormula: String;      // Original formula at the top-left cell
-    Function ShiftReference(const Ref: string; RowOffset, ColOffset: Integer): string;
-    Function AdjustRange(const Range: string; RowOffset, ColOffset: Integer): string;
-    Function IsCellReference(const Token: string): Boolean;
-    Function IsFunctionName(const Formula: string; Pos: Integer): Boolean;
-    Function NextToken(const Formula: string; var Pos: Integer): string;
-    Procedure HandleReferenceOrRange(var Formula: string; const Token: string; var Pos: Integer; RowOffset, ColOffset: Integer);
-    Function ProcessFormula(const Formula: string; RowOffset, ColOffset: Integer): string;
+    Function NextToken(var Pos: Integer): string;
+    Function AdjustsCellReferences(RowOffset, ColOffset: Integer): string;
   public
     Constructor Create(Row,Col: Integer; const Formula: String);
     Function Formula(Row, Col: Integer): String;
@@ -1152,134 +1147,45 @@ begin
   TopLeftFormula := Formula;
 end;
 
-Function TZSharedFormula.ShiftReference(const Ref: string; RowOffset, ColOffset: Integer): string;
-// Shifts a single cell reference (e.g., "A1") by the given row and column offsets
-var
-  ColLetters: string;
-  ColNum, i: Integer;
-begin
-  // Extract column letters (e.g., "A" from "A1")
-  i := 1;
-  while (i <= Length(Ref)) and CharInSet(Ref[i], ['A'..'Z']) do Inc(i);
-  ColLetters := Copy(Ref, 1, i - 1);
-  // Convert letters to numeric column index (A=1, B=2, ..., Z=26, AA=27)
-  ColNum := 0;
-  for i := 1 to Length(ColLetters) do ColNum := ColNum * 26 + (Ord(ColLetters[i]) - Ord('A') + 1);
-  // Apply column offset
-  Inc(ColNum, ColOffset);
-  // Convert back to letters
-  Result := '';
-  while ColNum > 0 do
-  begin
-    Dec(ColNum);
-    Result := Chr(Ord('A') + (ColNum mod 26)) + Result;
-    ColNum := ColNum div 26;
-  end;
-  // Apply row offset and append to column letters
-  Result := Result + IntToStr(StrToInt(Copy(Ref, Length(ColLetters) + 1, MaxInt)) + RowOffset);
-end;
-
-Function TZSharedFormula.AdjustRange(const Range: string; RowOffset, ColOffset: Integer): string;
-// Adjusts a range (e.g., "A1:B2") by shifting both start and end references
-var
-  Parts: TArray<string>;
-begin
-  Parts := Range.Split([':']);
-  if Length(Parts) = 2 then
-    Result := ShiftReference(Parts[0], RowOffset, ColOffset) + ':' +
-              ShiftReference(Parts[1], RowOffset, ColOffset)
-  else
-    Result := Range; // If not a valid range, return unchanged
-end;
-
-Function TZSharedFormula.NextToken(const Formula: string; var Pos: Integer): string;
+Function TZSharedFormula.NextToken(var Pos: Integer): string;
 // Reads next token (letters + digits) starting at Pos
 var
-  startPos: Integer;
+  StartPos: Integer;
 begin
-  startPos := Pos;
-  while (Pos <= Length(Formula)) and CharInSet(Formula[Pos], ['A'..'Z']) do Inc(Pos);
-  while (Pos <= Length(Formula)) and CharInSet(Formula[Pos], ['0'..'9']) do Inc(Pos);
-  Result := Copy(Formula, startPos, Pos - startPos);
+  StartPos := Pos;
+  while (Pos <= Length(TopLeftFormula)) and CharInSet(TopLeftFormula[Pos], ['A'..'Z']) do Inc(Pos);
+  while (Pos <= Length(TopLeftFormula)) and CharInSet(TopLeftFormula[Pos], ['0'..'9']) do Inc(Pos);
+  Result := Copy(TopLeftFormula,StartPos,Pos-StartPos);
 end;
 
 
-function TZSharedFormula.IsCellReference(const Token: string): Boolean;
-// Checks if token looks like a cell reference (letters followed by digits)
+Function TZSharedFormula.AdjustsCellReferences(RowOffset, ColOffset: Integer): string;
+// Scans TopLeftFormula and adjusts all cell references
 var
-  i: Integer;
-  hasLetters, hasDigits: Boolean;
+  Pos,Col,Row: Integer;
+  Token: string;
 begin
-  Result := False;
-  if Token = '' then Exit;
-  hasLetters := False;
-  hasDigits := False;
-  // Check for letters first
-  i := 1;
-  while (i <= Length(Token)) and CharInSet(Token[i], ['A'..'Z']) do
+  Pos := 1;
+  Result := '';
+  while Pos <= Length(TopLeftFormula) do
   begin
-    hasLetters := True;
-    Inc(i);
-  end;
-  // Then check for digits
-  while (i <= Length(Token)) and CharInSet(Token[i], ['0'..'9']) do
-  begin
-    hasDigits := True;
-    Inc(i);
-  end;
-  // Valid cell reference must have both letters and digits
-  Result := hasLetters and hasDigits;
-end;
-
-Function TZSharedFormula.IsFunctionName(const Formula: string; Pos: Integer): Boolean;
-// Checks if token is followed by '(' → function name
-begin
-  Result := (Pos <= Length(Formula)) and (Formula[Pos] = '(');
-end;
-
-Procedure TZSharedFormula.HandleReferenceOrRange(var Formula: string; const Token: string; var Pos: Integer; RowOffset, ColOffset: Integer);
-// Handles replacing a single reference or range
-var
-  startPos: Integer;
-  rangeToken: string;
-begin
-  startPos := Pos;
-  if (Pos <= Length(Formula)) and (Formula[Pos] = ':') then
-  begin
-    Inc(Pos);
-    while (Pos <= Length(Formula)) and CharInSet(Formula[Pos], ['A'..'Z']) do Inc(Pos);
-    while (Pos <= Length(Formula)) and CharInSet(Formula[Pos], ['0'..'9']) do Inc(Pos);
-    rangeToken := Copy(Formula, startPos - Length(Token), Pos - (startPos - Length(Token)));
-    Formula := Formula.Replace(rangeToken, AdjustRange(rangeToken, RowOffset, ColOffset));
-  end
-  else
-    Formula := Formula.Replace(Token, ShiftReference(Token, RowOffset, ColOffset));
-end;
-
-Function TZSharedFormula.ProcessFormula(const Formula: string; RowOffset, ColOffset: Integer): string;
-// Main method: scans formula and adjusts references
-var
-  i: Integer;
-  token: string;
-begin
-  Result := Formula;
-  i := 1;
-  while i <= Length(Result) do
-  begin
-    if CharInSet(Result[i], ['A'..'Z']) then
+    if CharInSet(TopLeftFormula[Pos],['A'..'Z']) then
     begin
-      token := NextToken(Result, i);
-      // Skip if it's a function name
-      if IsFunctionName(Result, i) then
-      begin
-        Inc(i);
-        Continue;
-      end;
-      if IsCellReference(token) then
-        HandleReferenceOrRange(Result, token, i, RowOffset, ColOffset);
-    end
-    else
-      Inc(i);
+      Token := NextToken(Pos);
+      if (Pos < Length(TopLeftFormula)) and (TopLeftFormula[Pos] = '(') then
+        // Excel function
+        Result := Result + Token
+      else
+        // Cell reference
+        begin
+          ZEGetCellCoords(Token,Col,Row);
+          Result := Result + ZEGetCellReference(Col+ColOffset,Row+RowOffset);
+        end;
+    end else
+    begin
+      Result := Result + TopLeftFormula[Pos];
+      Inc(Pos);
+    end;
   end;
 end;
 
@@ -1290,7 +1196,7 @@ var
 begin
   RowOffset := Row - Top;
   ColOffset := Col - Left;
-  Result := ProcessFormula(TopLeftFormula, RowOffset, ColOffset);
+  Result := AdjustsCellReferences(RowOffset,ColOffset);
 end;
 
 // Возвращает номер Relations из rels

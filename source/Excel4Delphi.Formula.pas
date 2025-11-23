@@ -26,6 +26,8 @@ function ZEA1ToR1C1(const Formula: string; CurCol, CurRow: integer; options: int
 
 function ZEGetCellCoords(const cell: string; out column, row: integer; StartZero: boolean = true): boolean;
 
+function ZEGetCellReference(Col,Row: integer; StartZero: boolean = true): String;
+
 implementation
 
 const
@@ -89,11 +91,11 @@ begin
   result := _isOk;
 end; // ZEGetCellCoords
 
-// Попытка преобразовать номер ячейки из R1C1 в A1 стиль
-// если не удалось распознать номер ячейки, то возвратит обратно тот же текст
+// Trying to convert cell number from R1C1 to A1 style
+// If the cell number could not be recognized, it will return the same text
 // INPUT
-// const st: string        - предположительно номер ячеки (диапазон)
-// CurCol: integer     - номер столбца ячейки
+// const st: string    - presumably cell number (range)
+// CurCol: integer     - cell column number
 // CurRow: integer     - номер строки ячейки
 // options: integer    - параметры преобразования
 // StartZero: boolean  - признак нумерации с нуля
@@ -847,6 +849,27 @@ begin
   for t := length(s) downto 1 do
     result := result + s[t];
 end; // ZEGetAAbyCol
+
+function ZEGetCellReference(Col,Row: integer; StartZero: boolean = true): String;
+var
+  Column: string;
+begin
+  if StartZero then
+  begin
+    Inc(Row);
+    Inc(Col);
+  end;
+  // Get column
+  Column := '';
+  while Col > 0 do
+  begin
+    Dec(Col);
+    Column := Chr(Ord('A') + (Col mod 26)) + Column;
+    Col := Col div 26;
+  end;
+  // Set result
+  Result := Column + IntToStr(Row);
+end;
 
 end.
 
