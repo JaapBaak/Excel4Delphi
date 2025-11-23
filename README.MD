@@ -4,13 +4,13 @@ Read, Write excel 2002/2003 XML (SpreadsheetML / XML Spreadsheet) library.
 
 fork from https://github.com/Avemey/zexmlss
 
-## Exchamples
+## Examples
 
 ```pas
 // Creating new workbook
 var workBook: TZWorkBook;
 ...
-workBook := TZWorkBook.Create();
+workBook := TZWorkBook.Create(nil);
 try
   workBook.Sheets.Add('My sheet');
   workBook.Sheets[0].ColCount := 10;
@@ -27,7 +27,7 @@ end
 // Editing exists workbook
 var workBook: TZWorkBook;
 ...
-workBook := TZWorkBook.Create();
+workBook := TZWorkBook.Create(nil);
 try
   workBook.LoadFromFile('file.xlsx');
   workBook.Sheets[0].CellRef['A', 0].AsString := 'Hello';
