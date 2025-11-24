@@ -5889,7 +5889,7 @@ var
             Xml.Attributes.Clear();
             Xml.Attributes.Add('aca', 'false');
             Xml.WriteTag('f', sheet.Cell[j, i].Formula, true, false, true);
-          end;
+          end else
           if (sheet.Cell[j, i].Data > '') then
           begin
             Xml.Attributes.Clear();
@@ -6174,9 +6174,10 @@ begin
     Xml.WriteEndTagNode(); // definedNames
 
     Xml.Attributes.Clear();
+    Xml.Attributes.Add('fullCalcOnLoad', '1', false);
+    Xml.Attributes.Add('iterate', 'false', false);
     Xml.Attributes.Add('iterateCount', '100');
     Xml.Attributes.Add('refMode', 'A1', false); // {tut}
-    Xml.Attributes.Add('iterate', 'false', false);
     Xml.Attributes.Add('iterateDelta', '0.001', false);
     Xml.WriteEmptyTag('calcPr', true);
 
