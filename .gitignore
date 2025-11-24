@@ -43,7 +43,8 @@
 *.orig
 *.rar
 *.zip
-
+*.xml
+*.rsm
 *.dproj.local
 
 
