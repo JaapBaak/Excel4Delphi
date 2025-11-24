@@ -9,13 +9,14 @@ type
   [TestFixture]
   SharedFormulaTest = class
   public
-    // Sample Methods
-    // Simple single Test
+    // Test whether the formula function correctly adjusts cell references
     [Test]
     [TestCase('TestA','0,0,1,1,1+A1,1+B2')]
     [TestCase('TestB','0,0,1,1,A1+1,B2+1')]
     [TestCase('TestC','0,0,1,1,A1+B2,B2+C3')]
     [TestCase('TestD','0,0,99,26,SUM(A1:C3),SUM(AA100:AC102)')]
+    [TestCase('TestE','0,0,1,1,Sheet1!A1,Sheet1!B2')]
+    [TestCase('TestF','0,0,99,26,SUM(Sheet1!A1:Sheet1!C3),SUM(Sheet1!AA100:Sheet1!AC102)')]
     procedure Test(Top,Left,Row,Column: Integer; const Formula,Expected : String);
   end;
 

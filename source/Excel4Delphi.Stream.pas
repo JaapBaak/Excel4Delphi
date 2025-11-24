@@ -1153,8 +1153,7 @@ var
   StartPos: Integer;
 begin
   StartPos := Pos;
-  while (Pos <= Length(TopLeftFormula)) and CharInSet(TopLeftFormula[Pos], ['A'..'Z']) do Inc(Pos);
-  while (Pos <= Length(TopLeftFormula)) and CharInSet(TopLeftFormula[Pos], ['0'..'9']) do Inc(Pos);
+  while (Pos <= Length(TopLeftFormula)) and CharInSet(TopLeftFormula[Pos], ['A'..'Z','a'..'z','0'..'9']) do Inc(Pos);
   Result := Copy(TopLeftFormula,StartPos,Pos-StartPos);
 end;
 
@@ -1172,8 +1171,8 @@ begin
     if CharInSet(TopLeftFormula[Pos],['A'..'Z']) then
     begin
       Token := NextToken(Pos);
-      if (Pos < Length(TopLeftFormula)) and (TopLeftFormula[Pos] = '(') then
-        // Excel function
+      if (Pos < Length(TopLeftFormula)) and CharInSet(TopLeftFormula[Pos],['(','!']) then
+        // Excel function or sheet reference
         Result := Result + Token
       else
         // Cell reference
